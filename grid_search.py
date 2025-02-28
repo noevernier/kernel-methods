@@ -1,7 +1,7 @@
 import optuna
 from src.tools import Dataset
 from src.model import KSVM
-from src.kernel import KmerKernel
+from src.kernel import KmerKernel, KmerMismatchKernel
 from functools import partial
 from optuna.pruners import MedianPruner
 from joblib import Parallel, delayed
@@ -10,14 +10,15 @@ import json
 cv = 3  
 best_params_per_idx = {}
 
-for train_idx in range(3):
+for train_idx in range(3, 4):
     print(f"Optimizing hyperparameters for train_idx={train_idx}")
     dataset = Dataset(train_idx=train_idx)
 
     def objective(trial):
         kmin = trial.suggest_int("kmin", 2, 30)
         kmax = trial.suggest_int("kmax", 2, 30)
-        C = trial.suggest_float("C", 1e-3, 1e2)
+        C = trial.suggest_float("C", 1e-3, 1e2, log=True)
+        m = trial.suggest_int("m", 1, kmin-1)
 
         if kmin >= kmax:
             return 0 
@@ -25,7 +26,7 @@ for train_idx in range(3):
         mean_accuracy = 0
         for _ in range(cv):
             Xtr, Xte, Ytr, Yte = dataset.train_test_split(test_size=0.2)
-            ksvm = KSVM(partial(KmerKernel, kmin=kmin, kmax=kmax), C=C, tol=1e-5)
+            ksvm = KSVM(partial(KmerMismatchKernel, kmin=kmin, kmax=kmax, m=m), C=C, tol=1e-5)
             alpha, beta = ksvm.fit(Xtr, Ytr)
             score = ksvm.score_recall_precision(Xte, Yte)
             mean_accuracy += score.accuracy
@@ -46,7 +47,7 @@ for train_idx in range(3):
         direction="maximize", study_name=study_name,
         storage='sqlite:///' + str(study_name) + '.db', load_if_exists=True, pruner=pruner
     )
-    r = Parallel(n_jobs=8)([delayed(optimize)(1, study_name) for _  in range(n_trials)])
+    r = Parallel(n_jobs=1)([delayed(optimize)(1, study_name) for _  in range(n_trials)])
 
     best_params_per_idx[train_idx] = {"params": study.best_params, "accuracy": study.best_value}
 
